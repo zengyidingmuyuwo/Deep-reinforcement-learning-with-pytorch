@@ -79,6 +79,17 @@ class UAVFireObstacleEnv(UAVFireEnv):
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def reset(self, seed=None, options=None):
+        """Reset; if the centroid-based start is inside an obstacle, fall back
+        to the circle centre (0, 0) to avoid an immediate collision."""
+        result = super().reset(seed=seed, options=options)
+        if self._at_obstacle(self.pos):
+            self.pos = np.zeros(2, dtype=np.float32)
+            self._prev_min_dist = self._min_dist_to_nearest()
+        return result
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     def step(self, action):
         if self._done:
             if _GYM_TUPLE_5:
@@ -116,9 +127,11 @@ class UAVFireObstacleEnv(UAVFireEnv):
         if min_dist < self.PROXIMITY_SCALE * 3:
             reward += self.PENALTY_PROXIMITY * np.exp(-min_dist / self.PROXIMITY_SCALE)
 
-        # ── Visit & boundary (same as base) ──────────────────────────────────
-        reward += self._check_visits()
-        reward += self._boundary_penalty()
+        # ── Visit, shaping & boundary (same as base) ─────────────────────────
+        n_before = int(np.sum(self.visited))
+        reward  += self._check_visits()
+        reward  += self._shaping_reward(n_before)
+        reward  += self._boundary_penalty()
 
         done = bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
         if np.all(self.visited):

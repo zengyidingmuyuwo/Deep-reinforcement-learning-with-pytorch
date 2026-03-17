@@ -52,9 +52,15 @@ def env_step(env, action):
 
 # ── argument parser ───────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description='SAC — Circle 8 fire coverage + obstacle avoidance')
-parser.add_argument('--center_csv',    default='',  type=str)
-parser.add_argument('--points_file',   default='',  type=str)
-parser.add_argument('--elevation_tif', default='',  type=str)
+parser.add_argument('--center_csv',
+    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_center.csv',
+    type=str, help='Circle-8 centre CSV (lat, lon, radius_m)')
+parser.add_argument('--points_file',
+    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_points.shp',
+    type=str, help='Circle-8 fire-point SHP or CSV file')
+parser.add_argument('--elevation_tif',
+    default=r'E:\lzd\fire data\各种图\数据完整的区域高程图.tif',
+    type=str, help='DEM GeoTIFF; pixels ≥ elev_threshold are obstacles')
 parser.add_argument('--elev_threshold', default=2000.0, type=float)
 parser.add_argument('--gamma',         default=0.99, type=float)
 parser.add_argument('--tau',           default=0.005, type=float)
@@ -265,14 +271,15 @@ def main():
     resolution_m = 50.0
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    if args.center_csv and args.points_file:
+    if args.center_csv and os.path.exists(args.center_csv) and \
+            args.points_file and os.path.exists(args.points_file):
         print(f'[SAC Circle8] Loading data from {args.points_file} …')
         lat_c, lon_c, radius, fire_points = load_circle_data(
             args.center_csv, args.points_file)
         print(f'  Centre: ({lat_c:.4f}°N, {lon_c:.4f}°E)  radius={radius:.0f} m  '
               f'fire points: {len(fire_points)}')
 
-        if args.elevation_tif:
+        if args.elevation_tif and os.path.exists(args.elevation_tif):
             print(f'[SAC Circle8] Loading elevation map: {args.elevation_tif}')
             try:
                 obstacle_map, resolution_m = load_elevation_obstacle_map(

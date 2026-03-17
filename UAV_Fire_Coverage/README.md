@@ -123,7 +123,7 @@ latitude,longitude,radius_m
 | Max turn rate | 0.25 rad/step (~14°/s) |
 | Time step | 1 s |
 | Step size | 20 m |
-| Visit radius | 120 m |
+| Visit radius | 200 m |
 
 ### State space
 
@@ -147,12 +147,13 @@ Single continuous action: heading-change rate ∈ [−1, 1], scaled by `MAX_TURN
 
 | Event | Reward |
 |-------|--------|
-| Each step | −0.01 |
-| Fire point visited | +10 |
-| All fire points visited | +100 |
-| Boundary violation (soft) | −1 |
+| Each step | −0.05 |
+| Fire point visited | +20 |
+| All fire points visited | +200 |
+| Boundary violation (soft) | 0 (UAV projected back; no penalty) |
 | Obstacle collision (Circle 8, terminal) | −50 |
 | Proximity to obstacle (Circle 8) | −2 × exp(−d / 80) |
+| Approaching nearest fire point | +0.1 × Δdist / step\_size (shaping) |
 
 ---
 

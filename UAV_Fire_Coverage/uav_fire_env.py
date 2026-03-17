@@ -51,14 +51,20 @@ class UAVFireEnv(gym.Env):
     STEP_SIZE    = UAV_SPEED * DT  # metres per step
 
     # ── Task parameters ───────────────────────────────────────────────────────
-    VISIT_RADIUS  = 120.0  # m  — fire point considered "visited" within this range
+    VISIT_RADIUS  = 200.0  # m  — fire point considered "visited" within this range
     MAX_STEPS     = 3000   # maximum steps per episode
 
     # ── Rewards ───────────────────────────────────────────────────────────────
-    REWARD_STEP       = -0.01   # small time penalty
-    REWARD_VISIT      = 10.0    # per fire point visited
-    REWARD_COMPLETE   = 100.0   # bonus for visiting all fire points
-    PENALTY_BOUNDARY  = -1.0    # per step outside region
+    REWARD_STEP       = -0.05   # time penalty per step
+    REWARD_VISIT      = 20.0    # per fire point visited
+    REWARD_COMPLETE   = 200.0   # bonus for visiting all fire points
+    PENALTY_BOUNDARY  = 0.0     # no per-step penalty; UAV is projected back into
+                                # the circle which is sufficient boundary enforcement
+    REWARD_APPROACH   = 0.1     # potential-based shaping coefficient: reward
+                                # proportional to reduction in distance to the
+                                # nearest unvisited fire point (normalised by
+                                # STEP_SIZE so one straight-line approach step
+                                # yields exactly REWARD_APPROACH)
 
     def __init__(self, fire_points, radius, num_nearest=6):
         """
@@ -104,12 +110,27 @@ class UAVFireEnv(gym.Env):
     def reset(self, seed=None, options=None):
         if seed is not None:
             np.random.seed(seed)
-        self.pos     = np.zeros(2, dtype=np.float32)
+
+        # ── Start near the centroid of fire points (much faster than always
+        #    starting at the origin, which can be far from all fire points) ───
+        centroid = (self.fire_points.mean(axis=0).astype(np.float32)
+                    if self.n_fire > 0 else np.zeros(2, dtype=np.float32))
+        jitter_r = min(self.VISIT_RADIUS * 2.0, self.radius * 0.25)
+        angle    = np.random.uniform(0.0, 2.0 * np.pi)
+        dist     = np.random.uniform(0.0, jitter_r)
+        self.pos = centroid + dist * np.array(
+            [np.cos(angle), np.sin(angle)], dtype=np.float32)
+        # Clamp into the circular region
+        d = float(np.linalg.norm(self.pos))
+        if d > self.radius * 0.9:
+            self.pos = self.pos * (self.radius * 0.9 / d)
+
         self.heading = np.random.uniform(0.0, 2.0 * np.pi)
-        self.visited = np.zeros(self.n_fire, dtype=bool)
+        self.visited    = np.zeros(self.n_fire, dtype=bool)
         self.step_count = 0
-        self._done  = False
+        self._done      = False
         self._trajectory = [self.pos.copy()]
+        self._prev_min_dist = self._min_dist_to_nearest()  # for shaping
         obs = self._get_obs()
         if _GYM_TUPLE_5:
             return obs, {}
@@ -134,9 +155,11 @@ class UAVFireEnv(gym.Env):
         self.step_count += 1
 
         # ── Reward bookkeeping ───────────────────────────────────────────────
-        reward = self.REWARD_STEP
-        reward += self._check_visits()
-        reward += self._boundary_penalty()
+        reward  = self.REWARD_STEP
+        n_before = int(np.sum(self.visited))
+        reward  += self._check_visits()
+        reward  += self._shaping_reward(n_before)
+        reward  += self._boundary_penalty()
 
         # ── Termination ──────────────────────────────────────────────────────
         done = bool(np.all(self.visited)) or (self.step_count >= self.MAX_STEPS)
@@ -166,12 +189,36 @@ class UAVFireEnv(gym.Env):
         return reward
 
     def _boundary_penalty(self):
-        """Soft boundary: penalise and project UAV back inside the circle."""
+        """Project UAV back inside the circle (no per-step penalty)."""
         dist_from_centre = float(np.linalg.norm(self.pos))
         if dist_from_centre > self.radius:
             self.pos = self.pos * (self.radius / dist_from_centre)
-            return self.PENALTY_BOUNDARY
+            return self.PENALTY_BOUNDARY   # 0.0 by default
         return 0.0
+
+    def _min_dist_to_nearest(self):
+        """Distance (metres) to the nearest unvisited fire point, or 0 if all visited."""
+        unvisited = np.where(~self.visited)[0]
+        if len(unvisited) == 0:
+            return 0.0
+        return float(np.min(np.linalg.norm(self.fire_points[unvisited] - self.pos, axis=1)))
+
+    def _shaping_reward(self, n_visited_before):
+        """Potential-based shaping: reward for reducing distance to nearest fire point.
+
+        Skips the step immediately after a visit (the "nearest fire point" jumps
+        to a farther one, which is expected and should not be penalised).
+        Updates ``self._prev_min_dist`` for the next step.
+        """
+        n_now   = int(np.sum(self.visited))
+        new_min = self._min_dist_to_nearest()
+        if n_now == n_visited_before:
+            # No visit this step: apply approach shaping
+            shaping = self.REWARD_APPROACH * (self._prev_min_dist - new_min) / self.STEP_SIZE
+        else:
+            shaping = 0.0  # reset baseline without penalising the jump
+        self._prev_min_dist = new_min
+        return float(shaping)
 
     # ─────────────────────────────────────────────────────────────────────────
 

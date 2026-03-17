@@ -61,8 +61,12 @@ def env_step(env, action):
 
 # ── argument parser ───────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description='PPO — Circle 1 multi-UAV fire coverage')
-parser.add_argument('--center_csv',  default='', type=str)
-parser.add_argument('--points_file', default='', type=str)
+parser.add_argument('--center_csv',
+    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_center.csv',
+    type=str, help='Circle-1 centre CSV (lat, lon, radius_m)')
+parser.add_argument('--points_file',
+    default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_1_points.shp',
+    type=str, help='Circle-1 fire-point SHP or CSV file')
 parser.add_argument('--num_uavs',    default=3,  type=int,   help='Number of UAV sub-clusters')
 parser.add_argument('--gamma',       default=0.99, type=float)
 parser.add_argument('--lr_actor',    default=3e-4, type=float)
@@ -143,11 +147,11 @@ class PPOAgent:
         return self.ptr % args.buffer_size == 0
 
     def update(self):
-        s   = torch.FloatTensor([t.s   for t in self.buffer]).to(device)
-        a   = torch.FloatTensor([t.a   for t in self.buffer]).to(device)
-        r   = torch.FloatTensor([t.r   for t in self.buffer]).unsqueeze(1).to(device)
-        s_  = torch.FloatTensor([t.s_  for t in self.buffer]).to(device)
-        alp = torch.FloatTensor([t.a_log_p for t in self.buffer]).unsqueeze(1).to(device)
+        s   = torch.FloatTensor(np.stack([t.s        for t in self.buffer])).to(device)
+        a   = torch.FloatTensor(np.stack([t.a        for t in self.buffer])).to(device)
+        r   = torch.FloatTensor(np.array([t.r        for t in self.buffer])).unsqueeze(1).to(device)
+        s_  = torch.FloatTensor(np.stack([t.s_       for t in self.buffer])).to(device)
+        alp = torch.FloatTensor(np.array([t.a_log_p  for t in self.buffer])).unsqueeze(1).to(device)
 
         r = (r - r.mean()) / (r.std() + 1e-7)
 
@@ -168,7 +172,8 @@ class PPOAgent:
             surr1 = ratio * adv[idx]
             surr2 = torch.clamp(ratio, 1 - args.clip_param,
                                         1 + args.clip_param) * adv[idx]
-            actor_loss  = -torch.min(surr1, surr2).mean()
+            entropy     = dist.entropy().mean()
+            actor_loss  = -torch.min(surr1, surr2).mean() - 0.01 * entropy
             critic_loss = F.smooth_l1_loss(self.critic(s[idx]), target_v[idx])
 
             self.opt_a.zero_grad()
@@ -220,7 +225,8 @@ def cluster_fire_points(fire_points, n_clusters):
 
 def main():
     # ── Load or generate data ─────────────────────────────────────────────────
-    if args.center_csv and args.points_file:
+    if args.center_csv and os.path.exists(args.center_csv) and \
+            args.points_file and os.path.exists(args.points_file):
         print(f'[PPO Circle1] Loading data from {args.points_file} …')
         lat_c, lon_c, radius, fire_points = load_circle_data(
             args.center_csv, args.points_file)
