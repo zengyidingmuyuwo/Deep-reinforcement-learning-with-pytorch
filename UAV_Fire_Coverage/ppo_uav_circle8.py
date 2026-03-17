@@ -56,7 +56,10 @@ def env_step(env, action):
 parser = argparse.ArgumentParser(description='PPO — Circle 8 fire coverage + obstacle avoidance')
 parser.add_argument('--center_csv',
     default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_center.csv',
-    type=str, help='Circle-8 centre CSV (lat, lon, radius_m)')
+    type=str, help='Circle-8 centre CSV (columns: circle_id, center_x, center_y, radius_m, diameter_m)')
+parser.add_argument('--circle_id',
+    default=None, type=int,
+    help='circle_id value to select from the centre CSV (default: first row)')
 parser.add_argument('--points_file',
     default=r'E:\lzd\python\贪心圆\111-copilot-process-fire-data-and-cluster\output\circle_8_points.shp',
     type=str, help='Circle-8 fire-point SHP or CSV file')
@@ -209,7 +212,7 @@ def main():
             args.points_file and os.path.exists(args.points_file):
         print(f'[PPO Circle8] Loading data from {args.points_file} …')
         lat_c, lon_c, radius, fire_points = load_circle_data(
-            args.center_csv, args.points_file)
+            args.center_csv, args.points_file, circle_id=args.circle_id)
         print(f'  Centre: ({lat_c:.4f}°N, {lon_c:.4f}°E)  radius={radius:.0f} m  '
               f'fire points: {len(fire_points)}')
 

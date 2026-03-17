@@ -2,7 +2,10 @@
 Data loading utilities for UAV fire coverage environments.
 
 Supported file formats:
-  - Circle center: CSV with columns [latitude, longitude, radius_m]
+  - Circle center: CSV with columns [circle_id, center_x, center_y, radius_m, diameter_m]
+      where center_x = longitude (°E) and center_y = latitude (°N).
+      ``radius_m`` may be omitted when ``diameter_m`` is present (radius = diameter / 2).
+      Legacy format [latitude, longitude, radius_m] is also accepted.
   - Fire points: ESRI Shapefile (.shp) **or** CSV with columns [latitude, longitude]
   - Elevation map: GeoTIFF (.tif) — requires rasterio (optional)
 
@@ -49,29 +52,97 @@ def local_to_latlon(east_m, north_m, lat_center, lon_center):
 # CSV loaders
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_circle_center_csv(filepath):
+def load_circle_center_csv(filepath, circle_id=None):
     """Load circle centre from a CSV file.
 
-    The CSV must contain at least these three columns (header names are
-    case-insensitive and stripped of whitespace):
+    Accepts two column-name conventions (header names are case-insensitive and
+    stripped of whitespace):
+
+    **New format** (output of the greedy-circle clustering script):
+        circle_id, center_x, center_y, radius_m, diameter_m
+
+        ``center_x`` is the longitude (°E) and ``center_y`` is the latitude (°N).
+        ``radius_m`` may be omitted when ``diameter_m`` is present; in that case
+        ``radius_m`` is computed as ``diameter_m / 2``.
+        A bare ``radius`` column (no ``_m`` suffix) is also accepted as an alias
+        for ``radius_m``.
+
+    **Legacy format**:
         latitude, longitude, radius_m
+
+    If none of the above radius columns are present, a default of 5 000 m is
+    assumed.  Pass an explicit ``radius_m`` column to avoid this silent default.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the CSV file.
+    circle_id : int or str, optional
+        When the CSV contains multiple rows (one per circle), use this value to
+        select a specific row by its ``circle_id`` column.  If *None*, the
+        first row is used.
 
     Returns
     -------
     (lat_center, lon_center, radius_m) : tuple[float, float, float]
     """
-    with open(filepath, newline='', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+    # Try common encodings so the file works on both Windows (GBK) and Linux
+    for encoding in ('utf-8-sig', 'utf-8', 'gbk', 'latin-1'):
+        try:
+            with open(filepath, newline='', encoding=encoding) as f:
+                rows = list(csv.DictReader(f))
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        raise ValueError(f"Cannot decode CSV with any supported encoding: {filepath}")
+
     if not rows:
         raise ValueError(f"Empty CSV: {filepath}")
 
-    # Normalise column names
-    row = {k.strip().lower(): v for k, v in rows[0].items()}
+    # Normalise column names (strip whitespace, lowercase)
+    norm_rows = [{k.strip().lower(): v.strip() for k, v in r.items()} for r in rows]
 
-    lat    = float(row['latitude'])
-    lon    = float(row['longitude'])
-    radius = float(row.get('radius_m', row.get('radius', 5000.0)))
+    # Select the target row
+    if circle_id is not None:
+        target_id = str(circle_id).strip()
+        matched = [r for r in norm_rows if r.get('circle_id', '') == target_id]
+        if not matched:
+            available = [r.get('circle_id', '') for r in norm_rows]
+            raise ValueError(
+                f"circle_id '{circle_id}' not found in {filepath}. "
+                f"Available IDs: {available}"
+            )
+        row = matched[0]
+    else:
+        row = norm_rows[0]
+
+    # ── Detect column-name convention ────────────────────────────────────────
+    if 'center_x' in row and 'center_y' in row:
+        # New format: center_x = longitude, center_y = latitude
+        lon = float(row['center_x'])
+        lat = float(row['center_y'])
+    elif 'latitude' in row and 'longitude' in row:
+        # Legacy format
+        lat = float(row['latitude'])
+        lon = float(row['longitude'])
+    else:
+        raise ValueError(
+            f"CSV {filepath} has unrecognised columns: {list(row.keys())}.\n"
+            "Expected either 'center_x'/'center_y' (new format) "
+            "or 'latitude'/'longitude' (legacy format)."
+        )
+
+    # ── Resolve radius ────────────────────────────────────────────────────────
+    if 'radius_m' in row and row['radius_m'] != '':
+        radius = float(row['radius_m'])
+    elif 'diameter_m' in row and row['diameter_m'] != '':
+        radius = float(row['diameter_m']) / 2.0
+    elif 'radius' in row and row['radius'] != '':
+        radius = float(row['radius'])
+    else:
+        radius = 5000.0  # default fallback
+
     return lat, lon, radius
 
 
@@ -212,11 +283,12 @@ def load_elevation_obstacle_map(tif_filepath, lat_center, lon_center,
 # High-level loader — auto-detects file type
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_circle_data(center_csv, points_file):
+def load_circle_data(center_csv, points_file, circle_id=None):
     """Convenience wrapper that loads centre + fire points for one circle.
 
     *center_csv* — path to the circle-centre CSV file.
     *points_file* — path to fire-points file (.shp or .csv).
+    *circle_id*   — optional row selector (see :func:`load_circle_center_csv`).
 
     Returns
     -------
@@ -224,7 +296,7 @@ def load_circle_data(center_csv, points_file):
     radius_m : float        — circle radius (metres)
     points : np.ndarray, shape (N, 2)  — fire points in local metric coords
     """
-    lat_c, lon_c, radius_m = load_circle_center_csv(center_csv)
+    lat_c, lon_c, radius_m = load_circle_center_csv(center_csv, circle_id=circle_id)
 
     ext = os.path.splitext(points_file)[1].lower()
     if ext == '.shp':
@@ -302,13 +374,17 @@ def generate_sample_circle8_data(n_points=35, radius=3000.0, seed=99):
 # CSV writer helpers (used to save sample data for inspection)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def save_sample_center_csv(filepath, lat, lon, radius_m):
-    """Write a sample circle-centre CSV file."""
+def save_sample_center_csv(filepath, lat, lon, radius_m, circle_id=1):
+    """Write a sample circle-centre CSV file in the new format.
+
+    Columns: circle_id, center_x (longitude), center_y (latitude),
+             radius_m, diameter_m.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
     with open(filepath, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['latitude', 'longitude', 'radius_m'])
-        writer.writerow([lat, lon, radius_m])
+        writer.writerow(['circle_id', 'center_x', 'center_y', 'radius_m', 'diameter_m'])
+        writer.writerow([circle_id, lon, lat, radius_m, radius_m * 2])
 
 
 def save_sample_points_csv(filepath, points_local, lat_center, lon_center):
