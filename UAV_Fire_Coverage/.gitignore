@@ -1,0 +1,10 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Trained model weights — large binary files, should not be committed to source control
+ppo_circle1_model/
+ppo_circle8_model/
+sac_circle1_model/
+sac_circle8_model/
